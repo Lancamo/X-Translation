@@ -100,9 +100,16 @@ def _is_wide_punct(ch):
             or 0x2018 <= o <= 0x201D)
 
 
+# 未登记在 ZH_WEIGHT 里的源字体：兜底按字号猜字重，但必须留痕——
+# 静默猜错字重是换一份 PDF 后最容易"看着对、其实整体错"的一类问题。
+UNKNOWN_FONTS = set()
+
+
 def pick_zh_weight(font: str, size: float) -> str:
     w = ZH_WEIGHT.get(font)
-    if w is None:                   # PlayfairDisplay-Regular
+    if w is None:                   # PlayfairDisplay-Regular：按字号决定
+        if font not in ZH_WEIGHT:
+            UNKNOWN_FONTS.add(font)
         if size >= 40:
             return "Black"
         if size >= 20:
@@ -232,6 +239,7 @@ def main():
     doc = pymupdf.open(SRC)
     css = css_block()
     report, n_replaced = [], 0
+    missing = []                    # 抽不到译文的单元——成品会保留英文原文
 
     by_page = {}
     for u in units:
@@ -271,6 +279,9 @@ def main():
             zh = tr.get(u["id"])
             if zh:
                 todo.append((u, zh))
+            else:
+                missing.append({"id": u["id"], "page": pno,
+                                "text": u["text"][:60]})
         if not todo:
             continue
 
@@ -329,11 +340,27 @@ def main():
     doc.close()
 
     print(f"replaced units: {n_replaced} -> {args.out}")
+
+    # 缺译文的单元会原样保留英文——必须显式报出来，否则成品局部漏翻而计数看着正常
+    if missing:
+        print(f"[warn] {len(missing)} 个单元没有译文，成品里保留了英文原文：")
+        for m in missing[:20]:
+            print(f"   {m['id']} p{m['page']}  {m['text']}")
+        if len(missing) > 20:
+            print(f"   …还有 {len(missing) - 20} 个，请补齐 translations_main.json 后重跑")
+    else:
+        print("missing translations: 0")
+
     shrunk = [r for r in report if r["scale"] < 0.985]
     print(f"auto-shrunk (scale<0.985): {len(shrunk)}")
     for r in sorted(shrunk, key=lambda r: r["scale"])[:20]:
         print(f"   {r['id']} scale={r['scale']} size={r['size']} "
               f"src={r['src_len']} zh={r['zh_len']}")
+    if UNKNOWN_FONTS:
+        print(f"[warn] {len(UNKNOWN_FONTS)} 个源字体未登记在 ZH_WEIGHT 里，"
+              f"字重是按字号猜的：{' '.join(sorted(UNKNOWN_FONTS))}")
+        print("       核对字重是否正确；确认后把它们补进 ZH_WEIGHT / LAT_STYLE")
+
     if args.report:
         json.dump(report, open(args.report, "w", encoding="utf-8"),
                   ensure_ascii=False, indent=1)

@@ -105,10 +105,18 @@ python3 scripts/10_probe_pdf.py input.pdf     # 页数/尺寸/字体/图片/文�
 | `XTRANS_SRC` | 源 PDF | `$XTRANS_BASE/input.pdf` |
 | `XTRANS_DECOR` | 品牌装饰字正则（逐页重复铺排的 logo 字样，不翻译） | 脚本内的默认值，**每个项目都要按实测值改** |
 
-OCR 二进制 `ocr_vision` 随 skill 走，不用往项目里拷。
+OCR 二进制 `ocr_vision` 与源码同放 `scripts/`。从仓库新装时二进制不存在，
+**首次使用先编译一次**（仓库只提供 `.swift`，不带二进制）：
+
+```bash
+swiftc -O scripts/ocr_vision.swift -o scripts/ocr_vision
+```
 
 ```
 原始 PDF ──── 67_source_guard.py --record   ★ 绝对红线：先记账（§零），全程不碰源文件
+   │
+   ├─ L0 准备   11_embed_fonts.py       ★ 字体落地：把目标语言字体解到 work/fonts/
+   │                                    不做这一步，回填会**静默回退系统字体**（字形变样且不报错）
    │
    ├─ L0 侦察    10_probe_pdf.py        类型判定 + 规模估算
    │             12_scan_image_text.py  图内文字 OCR（整页 4 倍渲染后 OCR）
@@ -134,19 +142,39 @@ OCR 二进制 `ocr_vision` 随 skill 走，不用往项目里拷。
    ├─ L2b 微标签 33_build_micro_plan.py   <5pt 微标签补译（放大后再译，见下）
    │             40_apply_overlay.py      同一脚本，读 overlay_plan_micro.json
    │
+   ├─ 收尾       19_manifest.py          写 run_manifest.json：产物溯源
+   │                                    （每步的输入/输出/脚本 sha256 + git commit + 参数，append-only）
+   │
    └─ L4 验收    60_scan_residue.py       成品反向 OCR，找残留外文并按成因归类
                  61_show_residue.py       渲染成对照图肉眼确认
                  62_verify_residue.py     回源核验：真英文残迹 vs OCR 误读中文 ★必做
                  63_audit_structure.py    T0 结构断言（页数/尺寸/书签/标题/字体）★门禁
+                 24b_freeze_glossary.py   从 T1 挖出的候选里固化术语表（人工裁决一次，之后回读核验）
                  64_audit_text.py         T1 术语·数字·专名 的源↔成品比对
+                 64b_visual_regress.py    三维视觉回归：逐页 SSIM + 掩膜外 AE + 图层 IoU
+                                          （补上抽检之外 90% 页面的自动报警）
                  65_sample_review.py      T2 分层抽检：自动选页 + 上下对照图
                  66_backtranslate.py      T3 回译核验（可选，两段式）
-                 69_qc_summary.py         汇总成一张 QC_REPORT.md
+                 69_qc_summary.py         汇总成一张 QC_REPORT.md（读上面所有 JSON，必须最后跑）
                  70_verify_visual.py      整页/局部上下对照（指定页码时用）
 ```
 
 **层序不能换**：L1 改文字层 → L3/L2 的坐标基准是「L3 替换位图后的底版」。
 L2 与 L2b 共享页坐标，顺序可换，但 L2b 排在 L2 后更安全（碰撞护栏判定更保守）。
+
+### 什么时候读哪份文档（★ 开工前先看这张表）
+
+本文件讲**为什么这么设计、判据是什么**；**每一步的确切命令、参数、JSON 结构只在
+`references/workflow.md`**。只凭本文件动手会漏参数，把 4 份 references 全读完又会占掉大量上下文。
+按时机取用：
+
+| 时机 | 读 |
+|---|---|
+| **开工前（任何项目，必做）** | `references/pdf-types.md`（先判定属于哪类 PDF，走错分支全盘返工）+ `references/workflow.md` |
+| 走到某一层开工前 | 本文件 §四 对应小节 + `references/workflow.md` 里该脚本的那一节 |
+| 要加新语言 / 换字体 | `references/fonts-langs.md` |
+| 某一步结果反常、疑心是已知问题 | `references/pitfalls.md`（按症状在六个分类里找） |
+| 交付前 | 本文件 §九 T0–T3 + `references/workflow.md` 的 `63_`~`69_` 各节 |
 
 ### L1：对齐必须精判（★ 回填前必做，最容易漏的一层）
 
@@ -241,7 +269,11 @@ Vision 在整页扫描模式下**基本读不出旋转 90° 的文字**（实测
 原 bbox = (v0', 1-u1', v1', 1-u0')
 ```
 
-筛选判据：映射回原图后 `w < 34 且 h > 18 且 h > 1.4w`。不加这道闸，整页正文会被重复检出。
+**竖排候选筛**（用在 `13_scan_vertical.py`，判断旋转扫描检出的框是不是真竖排文字）：
+映射回原图后 `w < 34 且 h > 18 且 h > 1.4w`。不加这道闸，整页正文会被重复检出。
+
+> ⚠️ 别和 §五 参数表里那条**渲染闸**（`w < 14 且 h > 18`）搞混——两者判的不是同一件事：
+> 这条筛"哪些检出算竖排文字"，那条定"译文横排还是逐字换行"。
 
 **渲染竖排译文时不要旋转文本框**——旋转后的插入框与 bbox 中心不重合，文字会跑偏出框。
 改为**逐字换行**（窄框里一字一行），位置严格沿用原 bbox，中文逐字正立反而更易读。
@@ -299,7 +331,7 @@ python3 43_cover_title.py --src work/stage/L1.pdf --out work/stage/L3.pdf \
 | `size_cap` | 1.15 | 字号上限 = 块高 × 1.15（不超原文行高） |
 | `scale_floor` | 0.985 | 低于此缩放率记入"需留意"清单 |
 | `dup_threshold` | 0.55 | 重叠去重阈值；同位置 OCR 常出多条，留文本更长的 |
-| 竖排判定 | `w < 14 且 h > 18` | 触发逐字换行 |
+| 竖排判定（**渲染闸**） | `w < 14 且 h > 18` | 定译文横排还是逐字换行。**与 §四 `13_` 的竖排候选筛（`w<34 且 h>18 且 h>1.4w`）不是同一个阈值** |
 | 背景众数占比 | ≥ 0.25（最好 ≥ 0.6） | 低于 0.25 覆盖会留接缝 |
 | 回源核验裁图外扩 | `max(2pt, 0.18 × 长边)` + 24px 白边 | 太小 Vision 读不出，核验结论不可信 |
 | 对齐·多行容差 | `max(1.5, 0.15 × 字号)` | 固定阈值在窄栏里会把居中与左对齐混为一谈 |

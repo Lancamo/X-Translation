@@ -28,8 +28,17 @@
 
 ## 环境要求
 
-- **macOS**（源文件加锁用 `chflags`；图内文字 OCR 用自带的 `ocr_vision` 工具，编译自 `scripts/ocr_vision.swift`，调用 Apple Vision 框架）
-- **Python 3.11+**，`pip install pymupdf`（建议 ≥1.28；PyMuPDF 为 AGPL-3.0，自用无影响，对外提供服务需注意授权）
+- **macOS**（源文件加锁用 `chflags`；图内文字 OCR 依赖 Apple Vision 框架）
+- **Python 3.11+**，依赖四项：
+  ```bash
+  pip install "pymupdf>=1.27" numpy Pillow fonttools
+  ```
+  （PyMuPDF 为 AGPL-3.0，自用无影响，对外提供服务需注意授权）
+- **OCR 工具需自行编译一次**（仓库只提供源码，不含二进制）：
+  ```bash
+  swiftc -O scripts/ocr_vision.swift -o scripts/ocr_vision
+  ./scripts/ocr_vision page1.png    # 自检：应输出 JSON
+  ```
 - **中英文字体文件**（放在项目 `work/fonts/`，如 Noto Serif SC + Roboto Serif，见 `references/fonts-langs.md`）
 
 ## 安装
@@ -58,7 +67,7 @@ git clone https://github.com/Lancamo/X-Translation.git
 |---|---|
 | `SKILL.md` | 技能主文档：红线、分层流程、实测坑表 |
 | `references/workflow.md` | 端到端流程与每步脚本参数 |
-| `references/pitfalls.md` | 48 条实测坑（ToUnicode 字形码越界、bfrange 解析串线、连字抑制等） |
+| `references/pitfalls.md` | 50 条实测坑（ToUnicode 字形码越界、bfrange 解析串线、连字抑制等） |
 | `references/pdf-types.md` | PDF 类型分诊（文字层/扫描件/混合） |
 | `references/fonts-langs.md` | 字体选择与语言扩展 |
 
@@ -68,6 +77,13 @@ git clone https://github.com/Lancamo/X-Translation.git
 - 图内文字 OCR 依赖 Apple Vision，仅限 macOS；OCR 误读需人工标注"保留原文"
 - 避头尾：MuPDF 断行器在图内标签处偶发行首标点（记录为已知小项）
 - "重建 ToUnicode"根治方案尚在验证中，当前以拉丁字体路由止血
+
+## 版本
+
+| 版本 | 要点 |
+|---|---|
+| **v1.1**（当前） | 修复三处静默失败：「缺译文跳过」「未登记字体猜字重」「产物溯源记空」；主文档补上字体落地步骤、文档阅读路由表与三个漏记脚本；README 事实修正；仓库不再携带编译产物（需自行 `swiftc`） |
+| v1.0 | 首版发布 |
 
 ## License
 

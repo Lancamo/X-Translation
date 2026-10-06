@@ -12,6 +12,7 @@ W3C PROV 三要素的最小落地：
       --outputs work/stage/V15_final.pdf \
       --scripts 24_rebuild_text.py 40_apply_overlay.py \
       --command "bash work/build_v1.4.sh work/stage/V15_final.pdf"
+（--scripts 传 scripts/ 下的文件名即可，不必带目录前缀；相对路径按各自基准解析）
 
 输出：work/manifests/<run_id>/run_manifest.json + 追加一行到 manifests/history.jsonl
 （append-only；大 PDF 不进 Git，小 JSON 进 Git）。不记录敏感原值。
@@ -35,11 +36,19 @@ def sha256(p: Path) -> str:
     return h.hexdigest()
 
 
-def ent(p) -> dict:
-    p = Path(p) if Path(p).is_absolute() else BASE / p
-    if not p.exists():
-        return {"path": str(p), "missing": True}
-    return {"path": str(p.relative_to(BASE)), "sha256": sha256(p), "size": p.stat().st_size}
+def ent(p, subdir: str = "") -> dict:
+    """subdir：相对路径的解析基准。
+
+    脚本一律放在 `scripts/` 下，所以 `--scripts` 传裸文件名即可——
+    不设这个基准的话，`24_rebuild_text.py` 会被拼成 `<BASE>/24_rebuild_text.py`，
+    每一项都记成 missing，脚本哈希（即脚本版本）就全丢了。
+    """
+    q = Path(p)
+    if not q.is_absolute():
+        q = (BASE / subdir / q) if subdir else (BASE / q)
+    if not q.exists():
+        return {"path": str(q), "missing": True}
+    return {"path": str(q.relative_to(BASE)), "sha256": sha256(q), "size": q.stat().st_size}
 
 
 def git_commit():
@@ -67,7 +76,7 @@ def main():
          "command": a.command,
          "inputs": [ent(x) for x in a.inputs],
          "outputs": [ent(x) for x in a.outputs],
-         "scripts": [ent(x) for x in a.scripts]}
+         "scripts": [ent(x, "scripts") for x in a.scripts]}
 
     d = BASE / "work" / "manifests" / a.run_id
     d.mkdir(parents=True, exist_ok=True)
@@ -77,8 +86,17 @@ def main():
         f.write(json.dumps(m, ensure_ascii=False) + "\n")
     n_in = sum(1 for x in m["inputs"] if not x.get("missing"))
     n_out = sum(1 for x in m["outputs"] if not x.get("missing"))
+    n_scr = sum(1 for x in m["scripts"] if not x.get("missing"))
     print(f"manifest -> {d / 'run_manifest.json'}（inputs {n_in} / outputs {n_out} / "
-          f"scripts {len(m['scripts'])}，git {m['git_commit'] or '—'}）")
+          f"scripts {n_scr}，git {m['git_commit'] or '—'}）")
+
+    # 找不到的项只记了路径、没有哈希——等于溯源记录不全，必须报出来
+    gaps = [x["path"] for x in m["inputs"] + m["outputs"] + m["scripts"]
+            if x.get("missing")]
+    if gaps:
+        print(f"[warn] {len(gaps)} 项没找到，这些项在溯源里没有哈希：")
+        for g in gaps:
+            print(f"   {g}")
 
 
 if __name__ == "__main__":

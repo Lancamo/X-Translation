@@ -5,3 +5,6 @@ releases/
 work/
 output/
 *.pdf
+
+# OCR 编译产物：仓库只留 ocr_vision.swift，由用户用 swiftc 编译
+scripts/ocr_vision
