@@ -67,7 +67,8 @@ git clone https://github.com/Lancamo/X-Translation.git
 |---|---|
 | `SKILL.md` | 技能主文档：红线、分层流程、实测坑表 |
 | `references/workflow.md` | 端到端流程与每步脚本参数 |
-| `references/pitfalls.md` | 50 条实测坑（ToUnicode 字形码越界、bfrange 解析串线、连字抑制等） |
+| `references/pitfalls.md` | 56 条实测坑（ToUnicode 字形码越界、bfrange 解析串线、连字抑制、长书专章等） |
+| `references/long-books.md` | **500 页以上长书**：分块构建、分批翻译、一致性归一、页级验收与目录约定（大部头文档实战） |
 | `references/pdf-types.md` | PDF 类型分诊（文字层/扫描件/混合） |
 | `references/fonts-langs.md` | 字体选择与语言扩展 |
 
@@ -82,7 +83,8 @@ git clone https://github.com/Lancamo/X-Translation.git
 
 | 版本 | 要点 |
 |---|---|
-| **v1.1**（当前） | 修复三处静默失败：「缺译文跳过」「未登记字体猜字重」「产物溯源记空」；主文档补上字体落地步骤、文档阅读路由表与三个漏记脚本；README 事实修正；仓库不再携带编译产物（需自行 `swiftc`） |
+| **v1.2**（当前） | 新增「长书（500 页以上）」专章与 `references/long-books.md`——来自大部头文档实战：分块构建、子 agent 分批翻译、术语/导航双冻结表、结构词一致性归一（含归一脚本三条 guard）、页级验收与红项逐项定性、`NN_原PDF名` 目录约定；pitfalls 增至 56 条 |
+| **v1.1** | 修复三处静默失败：「缺译文跳过」「未登记字体猜字重」「产物溯源记空」；主文档补上字体落地步骤、文档阅读路由表与三个漏记脚本；README 事实修正；仓库不再携带编译产物（需自行 `swiftc`） |
 | v1.0 | 首版发布 |
 
 ## License
