@@ -14,6 +14,7 @@
 
 用法：
   python 30_build_l2_queue.py --batch-size 200 --min-h 5
+  python 30_build_l2_queue.py --qc-flags work/ocr_qc/flags.json   # 扫描型：带 OCR 校对结果
 """
 import argparse
 import json
@@ -23,6 +24,7 @@ from pathlib import Path
 import os
 
 BASE = Path(os.environ.get("XTRANS_BASE", Path.cwd())).resolve()
+SRC = Path(os.environ.get("XTRANS_SRC", BASE / "input.pdf"))
 SCOPE = BASE / "work" / "ocr_scope4.json"
 OUTDIR = BASE / "work" / "l2_queue"
 
@@ -39,10 +41,23 @@ def main():
     ap.add_argument("--min-h", type=float, default=5.0,
                     help="块高下限（pt）。低于此值视为微型字，OCR 不可靠且中文更不可读，跳过")
     ap.add_argument("--scope", default=str(SCOPE))
+    ap.add_argument("--qc-flags", default=None,
+                    help="18_ocr_qc.py 的 flags.json：skip 块直接排除，review 块在工作单标 !QC")
     args = ap.parse_args()
 
     data = json.loads(Path(args.scope).read_text(encoding="utf-8"))
     items = data["in_image"]
+
+    # OCR 校对结果（扫描型管线）。键 = (page, text, bbox)，与 scope 同源所以能精确对上
+    qc_skip, qc_review = set(), set()
+    if args.qc_flags:
+        for f in json.loads(Path(args.qc_flags).read_text(encoding="utf-8"))["items"]:
+            key = (f["page"], f["text"], tuple(f["bbox"]))
+            (qc_skip if f["verdict"] == "skip" else qc_review).add(key)
+        print(f"QC: skip {len(qc_skip)} / review {len(qc_review)}")
+
+    def qc_key(x):
+        return (x["page"], x["text"].strip(), tuple(x["bbox"]))
 
     # 先按文本聚合，判断哪些是跨页高频装饰
     agg = defaultdict(lambda: {"n": 0, "pages": set()})
@@ -57,7 +72,9 @@ def main():
         if not t:
             continue
         reason = None
-        if x["cls"] == "skip_numeric":
+        if args.qc_flags and qc_key(x) in qc_skip:
+            reason = "qc_skip"
+        elif x["cls"] == "skip_numeric":
             reason = "skip_numeric"
         elif DECORATION.match(t):
             reason = "decoration"
@@ -81,11 +98,16 @@ def main():
         u["pages"].append(x["page"])
         u["h"].append(round(x["bbox"][3] - x["bbox"][1], 1))
 
+    # QC review 是逐实例的，工作单是逐文本的：任一实例被标 review 即整条标 !QC
+    review_texts = set()
+    if args.qc_flags:
+        review_texts = {x["text"].strip() for x in keep if qc_key(x) in qc_review}
+
     texts = sorted(uniq.items(), key=lambda kv: (-kv[1]["n"], kv[0]))
 
     OUTDIR.mkdir(parents=True, exist_ok=True)
     index = {
-        "source_pdf": "output/product.pdf",
+        "source_pdf": str(SRC),
         "stats": {
             "in_image_blocks": len(items),
             "skipped": len(skipped),
@@ -111,7 +133,8 @@ def main():
         for i, (t, v) in enumerate(chunk):
             gid = b * bs + i + 1
             pg = ",".join(str(p) for p in sorted(set(v["pages"]))[:5])
-            lines.append(f"{gid:04d}\t[{v['cls'][:4]} x{v['n']} p{pg} h{v['h'][0]:.0f}]\t{t}\n")
+            tag = "!QC " if t in review_texts else ""
+            lines.append(f"{gid:04d}\t[{tag}{v['cls'][:4]} x{v['n']} p{pg} h{v['h'][0]:.0f}]\t{t}\n")
         (OUTDIR / f"batch_{b+1:02d}.txt").write_text("".join(lines), encoding="utf-8")
 
     s = index["stats"]

@@ -84,7 +84,7 @@ PDF 翻译有两条路，必须先想清楚走哪条：
 | 类型 | 判据 | 走法 |
 |---|---|---|
 | **可编辑型**（绝大多数研报/白皮书） | 文字层覆盖率高、字体嵌入、图片有独立 xref | 全流程 L0→L4 |
-| **扫描型** | 无文字层或文字层是 OCR 垃圾；整页一张大图 | 跳过 L1，全部走 L2；先抽检 OCR 质量 |
+| **扫描型** | 无文字层或文字层是 OCR 垃圾；整页一张大图 | `10_probe` 识别后调用 `10b_render_ocr`；`18_ocr_qc` 门禁；跳过 L1，合格块走 L2 |
 | **纯矢量型**（InDesign/AI 导出） | 文字层完整但字体是子集、位置精确 | 走 L1；重点防字宽差异撑破文本框 |
 | **设计稿型**（画册、发布会 PPT 导出） | 半页宽页面、大标题是透明位图 | L0 就要扫"标题位图"，走 L3 |
 | **混合型**（实测的 a16z 报告） | 文字层 + 大量图表位图 + 标题位图 | 全流程，五层都要 |
@@ -115,11 +115,14 @@ swiftc -O scripts/ocr_vision.swift -o scripts/ocr_vision
 ```
 原始 PDF ──── 67_source_guard.py --record   ★ 绝对红线：先记账（§零），全程不碰源文件
    │
-   ├─ L0 准备   11_embed_fonts.py       ★ 字体落地：把目标语言字体解到 work/fonts/
+   ├─ L0 准备   09_fetch_fonts.py       ★ 取字体：本地 → 缓存 → 下载 → 系统兜底（断网不卡）
+   │             11_embed_fonts.py       ★ 字体落地：可变字体实例化成静态 TTF
    │                                    不做这一步，回填会**静默回退系统字体**（字形变样且不报错）
    │
-   ├─ L0 侦察    10_probe_pdf.py        类型判定 + 规模估算
+   ├─ L0 侦察    10_probe_pdf.py        类型判定 + OCR 路由（--json 可供编排消费）
+   │             10b_render_ocr.py      扫描型：渲染/去斜/增强/整页 OCR（route=ocr 时调用）
    │             12_scan_image_text.py  图内文字 OCR（整页 4 倍渲染后 OCR）
+   │             18_ocr_qc.py           OCR 后分级/复读/GO-REVIEW-NO-GO 门禁
    │             13_scan_vertical.py    竖排补扫（旋转 90° 再 OCR）
    │             14_scan_bg.py          背景是否均匀 → 覆盖法可行性
    │             15/16/17_probe|audit   分层抽样、小字可见性、OCR 质量抽检
@@ -134,9 +137,9 @@ swiftc -O scripts/ocr_vision.swift -o scripts/ocr_vision
    │             42_make_cover_art.py      「只有位图」→ 生成目标语言美术字
    │             43_cover_title.py         原位换图（同像素尺寸 / 同矩形 / 同层级）
    │
-   ├─ L2 图内文字 30_build_l2_queue.py    生成工作单（按块高过滤）
-   │              ← 翻译 → trans_*.txt
-   │             31_build_l2_plan.py      合成覆盖计划（重叠去重 + 竖排判定）
+   ├─ L2 图内文字 30_build_l2_queue.py    生成工作单（按块高过滤；可接 --qc-flags）
+   │              ← 翻译 → trans_*.txt（`!QC` 行先人工核图）
+   │             31_build_l2_plan.py      合成覆盖计划（重叠去重 + 竖排判定 + QC skip 过滤）
    │             40_apply_overlay.py      采样背景色 → 原位铺底 → 写译文 ★核心
    │
    ├─ L2b 微标签 33_build_micro_plan.py   <5pt 微标签补译（放大后再译，见下）
@@ -342,7 +345,20 @@ python3 43_cover_title.py --src work/stage/L1.pdf --out work/stage/L3.pdf \
 
 ## 六、字体与多语言
 
-字体下载源（实测可达）：`raw.githubusercontent.com/google/fonts/main/ofl/<family>/<File>.ttf`。
+字体获取是**分四级降级**的（`09_fetch_fonts.py`），不要只认一条下载链接：
+
+```
+L0 work/fonts/ 已有静态字体
+L1 ~/.cache/x-translation/fonts/ 缓存（一次下载，跨项目复用）
+L2 下载可变字体 ← 直连 GitHub → jsDelivr 镜像 → $XTRANS_FONT_MIRROR（内网/自建）
+L3 系统字体兜底（macOS 宋体 / Times New Roman），流程继续但字形会变
+```
+
+**断网或镜像被拦时不会卡住**：每个源都有连接超时，失败立刻换下一个；全失败就降到
+系统字体，并在 `work/fonts/FONT_SOURCE.json` 记录实际来源、在终端大字告警。
+降级后交付前必须确认字形差异是否可接受；网络恢复后删掉 `work/fonts/*.ttf` 重跑即可换回。
+
+下载源（L2）：`raw.githubusercontent.com/google/fonts/main/ofl/<family>/<File>.ttf`。
 Noto Serif 全系列覆盖 CJK/阿拉伯/泰文。字体清单与选择原则见 `references/fonts-langs.md`。
 
 **多语言实测结论**（7 种语言渲染同一句，管线代码一行不改）：
@@ -654,7 +670,11 @@ Windows/Linux 没有 Vision：改用 `tesseract --psm 11 tsv`，坐标换算逻�
 ├── output/<名称>_<目标语>.pdf          成品（不进 git）
 ├── scripts/                            管线脚本（skill 里的副本，序号即执行顺序）
 ├── work/
+│   ├── probe.json                      类型与 OCR 路由判定（可选）
+│   ├── ocr_pages4/                     OCR 输入页图（中间产物）
 │   ├── ocr_raw4.json / ocr_scope4.json 整页 OCR 与图内文字侦察结果
+│   ├── ocr_render_meta.json             去斜/增强/倍率记录
+│   ├── ocr_qc/flags.json + report.md    OCR 校对门禁与处置清单
 │   ├── ocr_vertical*.json              竖排补扫
 │   ├── units.json / translations.json  文字层单元与译文
 │   ├── align_changes.json              对齐改判清单（含三轴极差，便于复核）

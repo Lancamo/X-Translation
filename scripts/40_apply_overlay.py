@@ -289,6 +289,7 @@ def main():
                                       "size": round(sz, 2), "zh": it["zh"][:26]})
 
     out = BASE / plan["output"]
+    out.parent.mkdir(parents=True, exist_ok=True)
     doc.subset_fonts()
     doc.save(out, garbage=4, clean=True, deflate=True, deflate_fonts=True)
     doc.close()

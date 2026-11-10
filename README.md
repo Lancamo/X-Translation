@@ -39,7 +39,9 @@
   swiftc -O scripts/ocr_vision.swift -o scripts/ocr_vision
   ./scripts/ocr_vision page1.png    # 自检：应输出 JSON
   ```
-- **中英文字体文件**（放在项目 `work/fonts/`，如 Noto Serif SC + Roboto Serif，见 `references/fonts-langs.md`）
+- **中英文字体**：`09_fetch_fonts.py` 会自动获取（本地 → 缓存 → 下载 → 系统字体兜底）。
+  默认 Noto Serif SC + Roboto Serif；外网不稳时会降到 macOS 宋体 + Times New Roman 并把降级范围写进
+  `work/fonts/FONT_SOURCE.json`。内网/自建镜像可设 `XTRANS_FONT_MIRROR`。详见 `references/fonts-langs.md`
 
 ## 安装
 
@@ -54,10 +56,14 @@ git clone https://github.com/Lancamo/X-Translation.git
 技能加载后，对话里说"翻译这个 PDF，保留原版面"即可触发。典型流程：
 
 ```
-侦察 → 字体嵌入 → 文字层提取分诊 → 逐条翻译（工作单模式，带术语表）
+侦察 → 字体获取/实例化 → 文字层提取分诊 → 逐条翻译（工作单模式，带术语表）
 → L1 文字层回填 / L2 图内覆盖 / L3 封面换字 / L2b 微标签
 → T0–T3 检验 + 视觉回归 + 残迹扫描 → QC_REPORT.md 验收总表
 ```
+
+**扫描型 PDF（无文字层）走另一条支线**：`10_probe` 判出 `route=ocr` → `10b_render_ocr`
+（渲染/去斜/增强/整页 OCR）→ `18_ocr_qc`（GO/REVIEW/NO-GO 门禁）→ 合格块进 L2 覆盖。
+未经 QC 通过的块不会被写进成品。
 
 所有中间产物在项目 `work/`，成品在 `output/`，逐版本保留。
 
@@ -67,7 +73,7 @@ git clone https://github.com/Lancamo/X-Translation.git
 |---|---|
 | `SKILL.md` | 技能主文档：红线、分层流程、实测坑表 |
 | `references/workflow.md` | 端到端流程与每步脚本参数 |
-| `references/pitfalls.md` | 56 条实测坑（ToUnicode 字形码越界、bfrange 解析串线、连字抑制、长书专章等） |
+| `references/pitfalls.md` | 58 条实测坑（ToUnicode 字形码越界、bfrange 解析串线、连字抑制、扫描件 OCR 等） |
 | `references/long-books.md` | **500 页以上长书**：分块构建、分批翻译、一致性归一、页级验收与目录约定（大部头文档实战） |
 | `references/pdf-types.md` | PDF 类型分诊（文字层/扫描件/混合） |
 | `references/fonts-langs.md` | 字体选择与语言扩展 |
@@ -83,8 +89,9 @@ git clone https://github.com/Lancamo/X-Translation.git
 
 | 版本 | 要点 |
 |---|---|
-| **v1.2**（当前） | 新增「长书（500 页以上）」专章与 `references/long-books.md`——来自大部头文档实战：分块构建、子 agent 分批翻译、术语/导航双冻结表、结构词一致性归一（含归一脚本三条 guard）、页级验收与红项逐项定性、`NN_原PDF名` 目录约定；pitfalls 增至 56 条 |
-| **v1.1** | 修复三处静默失败：「缺译文跳过」「未登记字体猜字重」「产物溯源记空」；主文档补上字体落地步骤、文档阅读路由表与三个漏记脚本；README 事实修正；仓库不再携带编译产物（需自行 `swiftc`） |
+| **v1.3**（当前） | 新增扫描型 PDF 支线：`10_probe` 路由 → `10b_render_ocr`（渲染/去斜/增强/整页 OCR）→ `18_ocr_qc`（GO/REVIEW/NO-GO 门禁）→ `30/31 --qc-flags` 接入翻译队列；新增字体四级降级 `09_fetch_fonts`（本地/缓存/多源下载/系统字体，断网不卡）；修复扫描件页面尺寸写死 720×405；pitfalls 增至 58 条 |
+| v1.2 | 新增「长书（500 页以上）」专章与 `references/long-books.md`——来自大部头文档实战：分块构建、子 agent 分批翻译、术语/导航双冻结表、结构词一致性归一（含归一脚本三条 guard）、页级验收与红项逐项定性、`NN_原PDF名` 目录约定；pitfalls 增至 56 条 |
+| v1.1 | 修复三处静默失败：「缺译文跳过」「未登记字体猜字重」「产物溯源记空」；主文档补上字体落地步骤、文档阅读路由表与三个漏记脚本；README 事实修正；仓库不再携带编译产物（需自行 `swiftc`） |
 | v1.0 | 首版发布 |
 
 ## License

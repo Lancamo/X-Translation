@@ -44,6 +44,7 @@ def classify(t):
 
 def main():
     src = pymupdf.open(SRC)
+    page_count = src.page_count
     ocr = json.loads(OCR.read_text(encoding="utf-8"))
 
     # 文字层块（页面 pt 坐标）
@@ -56,17 +57,18 @@ def main():
             txt = "".join(s["text"] for l in b.get("lines", []) for s in l["spans"]).strip()
             if txt:
                 text_blocks.append((pno + 1, pymupdf.Rect(b["bbox"]), txt))
-    src.close()
-
     per_page = Counter()
     in_image = []          # 图内文字（未与文字层重合的 OCR 块）
     on_text_layer = 0
 
     for o in ocr:
         pno = int(re.search(r"p(\d+)", o["file"]).group(1))
+        # 页面尺寸取当页 rect，不写死——同一份 PDF 里不同页 MediaBox 可以不同，
+        # 720x405 是 a16z 设计稿的实测值，扫描型 A4/Letter 用它坐标会全错
+        R = src[pno - 1].rect
         r = pymupdf.Rect(
-            o["x"] * 720, (1 - o["y"] - o["h"]) * 405,
-            (o["x"] + o["w"]) * 720, (1 - o["y"]) * 405,
+            o["x"] * R.width, (1 - o["y"] - o["h"]) * R.height,
+            (o["x"] + o["w"]) * R.width, (1 - o["y"]) * R.height,
         )
         area = rect_area(r)
         if area < 1:
@@ -92,6 +94,7 @@ def main():
         })
         per_page[pno] += 1
 
+    src.close()
     uniq = Counter(x["text"] for x in in_image)
     by_cls = Counter(x["cls"] for x in in_image)
     uniq_cls = {c: sum(1 for t, n in uniq.items()
@@ -127,7 +130,7 @@ def main():
         print(f"  {c:<13}: {s['by_class_blocks'].get(c,0):>5} / {s['by_class_unique'].get(c,0):>4} / {s['by_class_unique_chars'].get(c,0):>6}")
     print()
     print(f"去重后唯一字符串总数: {s['unique_strings']}")
-    print(f"含图内文字的页数    : {s['pages_with_in_image_text']} / 90")
+    print(f"含图内文字的页数    : {s['pages_with_in_image_text']} / {page_count}")
     print(f"图内文字最多的页    : {s['top_pages']}")
     print()
     print("=== 图内文字示例（每页最多 6 条，前 12 页）===")

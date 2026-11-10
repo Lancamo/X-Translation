@@ -7,12 +7,35 @@
 """
 import collections
 import os
+import sys
 from fontTools.ttLib import TTFont
 from fontTools.varLib.instancer import instantiateVariableFont
 from pathlib import Path
 BASE = Path(os.environ.get("XTRANS_BASE", Path.cwd())).resolve()
 
 FONTS = BASE / "work/fonts"
+
+# 管线真正用的是 8 个静态字体；可变字体只是用来生成它们的。
+# 三个 VF 相互独立：只下到其中一部分时，能实例化的先做，剩下的沿用已有静态字体，
+# 不要把已经拿到的也丢掉。
+_STATIC = ["NotoSerifSC-Regular.ttf", "NotoSerifSC-Medium.ttf",
+           "NotoSerifSC-Bold.ttf", "NotoSerifSC-Black.ttf",
+           "RobotoSerif-Regular.ttf", "RobotoSerif-Medium.ttf",
+           "RobotoSerif-Bold.ttf", "RobotoSerif-Italic.ttf"]
+_VF_ZH = FONTS / "NotoSerifSC-VF.ttf"
+_VF_LAT = FONTS / "RobotoSerif-VF.ttf"
+_VF_LAT_IT = FONTS / "RobotoSerif-Italic-VF.ttf"
+_have_zh = _VF_ZH.exists()
+_have_lat = _VF_LAT.exists() and _VF_LAT_IT.exists()
+
+if not (_have_zh or _have_lat):
+    if all((FONTS / n).exists() for n in _STATIC):
+        note = FONTS / "FONT_SOURCE.json"
+        src = "系统字体兜底，字形已换" if note.exists() else "已有静态字体"
+        print(f"没有可变字体，但 8 个静态字体已就绪（{src}），跳过实例化。")
+        sys.exit(0)
+    sys.exit("字体不完整：没有可变字体，静态字体也没齐。"
+             "先跑 scripts/09_fetch_fonts.py。")
 
 
 def rank(cp: int):
@@ -64,16 +87,30 @@ def make(src, axes, out, deamb=False):
     chk.close()
 
 
-print("Noto Serif SC (中文)")
-for name, w in [("Regular", 400), ("Medium", 500), ("Bold", 700), ("Black", 900)]:
-    make(f"{FONTS}/NotoSerifSC-VF.ttf", {"wght": w},
-         f"{FONTS}/NotoSerifSC-{name}.ttf", deamb=True)
+if _have_zh:
+    print("Noto Serif SC (中文)")
+    for name, w in [("Regular", 400), ("Medium", 500), ("Bold", 700), ("Black", 900)]:
+        make(str(_VF_ZH), {"wght": w},
+             f"{FONTS}/NotoSerifSC-{name}.ttf", deamb=True)
+else:
+    print("Noto Serif SC：无可变字体，沿用现有静态字体")
 
-print("\nRoboto Serif (拉丁)")
-for name, w in [("Regular", 400), ("Medium", 500), ("Bold", 700)]:
-    make(f"{FONTS}/RobotoSerif-VF.ttf",
-         {"wght": w, "wdth": 100, "opsz": 20, "GRAD": 0},
-         f"{FONTS}/RobotoSerif-{name}.ttf")
-make(f"{FONTS}/RobotoSerif-Italic-VF.ttf",
-     {"wght": 400, "wdth": 100, "opsz": 20, "GRAD": 0},
-     f"{FONTS}/RobotoSerif-Italic.ttf")
+if _have_lat:
+    print("\nRoboto Serif (拉丁)")
+    for name, w in [("Regular", 400), ("Medium", 500), ("Bold", 700)]:
+        make(str(_VF_LAT),
+             {"wght": w, "wdth": 100, "opsz": 20, "GRAD": 0},
+             f"{FONTS}/RobotoSerif-{name}.ttf")
+    make(str(_VF_LAT_IT),
+         {"wght": 400, "wdth": 100, "opsz": 20, "GRAD": 0},
+         f"{FONTS}/RobotoSerif-Italic.ttf")
+else:
+    print("\nRoboto Serif：可变字体不全，沿用现有静态字体")
+
+still_missing = [n for n in _STATIC if not (FONTS / n).exists()]
+if still_missing:
+    sys.exit(f"静态字体仍缺 {', '.join(still_missing)}：先跑 scripts/09_fetch_fonts.py。")
+
+# 两组都已换回原字体，系统兜底的来源记录可以清掉
+if _have_zh and _have_lat:
+    (FONTS / "FONT_SOURCE.json").unlink(missing_ok=True)

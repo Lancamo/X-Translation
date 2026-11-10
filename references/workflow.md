@@ -60,19 +60,66 @@ python3 67_source_guard.py --check --files a.pdf b.pdf   # 额外素材一并守
 
 ## L0 侦察
 
-### `10_probe_pdf.py` — 类型判定
+### `10_probe_pdf.py` — 类型判定与 OCR 路由
 
 ```bash
-python3 10_probe_pdf.py <input.pdf>
+python3 10_probe_pdf.py <input.pdf> --out work/probe.json
+python3 10_probe_pdf.py <input.pdf> --json   # 给编排脚本消费
 ```
 
-报告：页数、页面尺寸（pt）、字体列表与是否嵌入、图片数量与 xref、文字层字符数。
-**判据**：文字层字符数 / 页数 < 50 → 视为扫描型；页面尺寸非 A4/Letter（如 720×405）→ 设计稿型。
+报告页数、页面尺寸、字体、图片、每页文字量，并输出 `route`：
 
-### `11_embed_fonts.py` — 字体落地
+| route | 含义 | 下一步 |
+|---|---|---|
+| `text_layer` | 可编辑/纯矢量，文字层可用 | 走 L1；若有图表位图仍按 L2 OCR 侦察 |
+| `ocr_plus_text_layer` | 混合型，文字层与整页图像并存 | 保留 L1，同时走 `10b` 侦察图像文字 |
+| `ocr` | 扫描型：无可用文字层或多数页面是整页图 | **自动转入 OCR 分支**，跳过 L1 |
 
-把目标语言字体下载/复制到 `work/fonts/`，并生成 `@font-face` CSS 片段。
-字体清单见 `fonts-langs.md`。
+默认判据：平均文字量 < 50 字/页 → `ocr`；若文字层可用但至少一半页面是覆盖 80% 页面面积的整页图 → `ocr_plus_text_layer`。
+这只是路由判定，不是质量放行；OCR 质量必须再过 `18_ocr_qc.py`。
+
+### `10b_render_ocr.py` — 扫描型 OCR 入口
+
+扫描型不要再手写「渲染每页 + 调 Vision」命令，统一从这个入口走：
+
+```bash
+# 先抽检 5 页，只估倾角，不修改坐标
+python3 10b_render_ocr.py --pages 1-5 --deskew
+
+# 全量 OCR；扫描页倾斜时回正，并把 OCR 框逆映射回原 PDF 坐标
+python3 10b_render_ocr.py --deskew-apply
+
+# 灰度/对比度差时再加轻度增强（不是默认开启，避免放大噪声）
+python3 10b_render_ocr.py --deskew-apply --enhance
+```
+
+产物：`work/ocr_pages4/pNNN.png`、`work/ocr_raw4.json`、`work/ocr_render_meta.json`。
+`ocr_raw4.json` 与图内文字 OCR 共用 `file/conf/text/x/y/w/h` 格式，Vision 坐标是归一化、
+y 从底部起算；去斜后会把四角框逆映射回未旋转 PDF 页面，所以下游坐标不漂。
+批量 OCR 会自动编译 skill 内的 `ocr_vision.swift`（macOS）；其他系统需替换 OCR 后端。
+
+### `09_fetch_fonts.py` — 取字体（断网/镜像被拦也不卡）
+
+按 `work/fonts/` → `~/.cache/x-translation/fonts/` → 下载 → 系统字体 的顺序降级。
+下载是**逐个文件**做的，单源连接超时 8 秒、总超时 600 秒，失败立刻换下一个源，
+不会像并发批量下载那样「三个加起来一起超时」。
+
+```bash
+python3 scripts/09_fetch_fonts.py            # 自动
+python3 scripts/09_fetch_fonts.py --offline  # 完全离线
+python3 scripts/09_fetch_fonts.py --status   # 当前来源
+```
+
+降到系统字体时会写 `work/fonts/FONT_SOURCE.json` 并在终端告警——**字形会变，交付前要确认**。
+字体清单、镜像与缓存细节见 `fonts-langs.md`。
+
+### `11_embed_fonts.py` — 字体实例化
+
+把 `work/fonts/*-VF.ttf` 按字重实例化成管线要用的 8 个静态 TTF（并做 cmap 去歧义）。
+如果 `09_fetch_fonts.py` 已经降级到系统字体（没有 VF、但静态 TTF 齐全），本脚本会
+打印说明后跳过，**不会报错中断管线**。
+
+`@font-face` 的 CSS 片段写法见 `fonts-langs.md` 第三节。
 
 ### `12_scan_image_text.py` — 图内文字 OCR 侦察
 
@@ -137,6 +184,47 @@ Vision 整页模式下基本读不出旋转 90° 的纵轴标题。把页面图�
 ### `17_audit_ocr.py` — OCR 质量抽检
 
 把页面裁剪图与 OCR 文本并排，肉眼核对误识率。OCR 认错的条目必须标 `=` 保留原文。
+
+### `18_ocr_qc.py` — OCR 后校对门禁（扫描型必做）
+
+```bash
+python3 18_ocr_qc.py --recheck 8
+# 图像已经很干净、只想分级时：
+python3 18_ocr_qc.py --recheck 0
+```
+
+它不替人改 OCR 原文，而是把风险显式分成三类：
+
+| verdict | 含义 | 后续处理 |
+|---|---|---|
+| `ok` | 置信度与启发式检查正常 | 可进入翻译队列 |
+| `review` | 低置信、重复读冲突、疑似乱码，或 6x 复读不一致 | 工作单标 `!QC`，人工看原图后译或写 `=` |
+| `skip` | OCR 极低置信，或确定性噪声 | 不覆盖，保留源图（B 降级） |
+
+`18` 还会按页面平均置信度分层抽样，用 6x 重渲染复读，输出：
+`work/ocr_qc/flags.json`、`work/ocr_qc/report.md`，并给出 `GO` / `REVIEW` / `NO-GO`：
+
+- `GO`：可继续；`GO*`：未做复读，只适合小样本，不建议直接跑大部头。
+- `REVIEW`：先处理 `review` 条目或改善图像后重跑。
+- `NO-GO`：OCR 噪声比例过高或复读一致率过低，不得全量翻译；只能缩小范围，或转人工 OCR。
+
+### OCR 分支与翻译队列的接法
+
+```bash
+python3 12_scan_image_text.py
+python3 18_ocr_qc.py --recheck 8
+# 门禁通过后：
+python3 30_build_l2_queue.py --qc-flags work/ocr_qc/flags.json
+# 人工填写 batch_*.txt 对应的 trans_*.txt，review 行先核图
+python3 31_build_l2_plan.py --qc-flags work/ocr_qc/flags.json \
+  --source input.pdf --output output/product.pdf
+python3 40_apply_overlay.py work/l2_queue/overlay_plan_l2.json
+```
+
+这是 **A 主、B 降级** 的实际含义：`40_apply_overlay.py` 写入的是 PDF 真文字，
+通过校对的 OCR 块译成中文后，最终可复制/搜索；`review` 由人工裁决后也可进入文字层；
+`skip` 不做危险覆盖，保留原扫描图，避免把错误 OCR 写成错误译文。不能把「所有页面都可搜索」
+当成自动保证——被 skip 或没有译文的区域仍是图片，必须在 QC 报告中如实标出。
 
 ---
 
@@ -578,8 +666,12 @@ def cell(v):
 input.pdf
    ├─ 00  67_source_guard.py --record ─→ work/verify/source_integrity.json（红线基线）
    │                                    …收工时 --check 复核，内容变即退出码 1
-   ├─ L0  work/ocr_raw4.json ─→ ocr_scope4.json ─→ ocr_vertical.json
-   │                                          └─→ bg_probe.json / strata 抽样图
+   ├─ L0  10_probe_pdf.py --json ─→ route=ocr ? 10b_render_ocr.py : L1
+   │      work/ocr_raw4.json ─→ ocr_scope4.json ─→ 18_ocr_qc.py
+   │                                      ├─ flags.json / report.md
+   │                                      └─ GO → l2_queue（REVIEW 人工裁决，NO-GO 停止）
+   │      ocr_scope4.json ─→ ocr_vertical.json
+   │                          └─→ bg_probe.json / strata 抽样图
    ├─ L1  units.json ─→ translations.json ─→ (22_fix_align 精判) ─→ baseline_calib.json
    │                                                              └─→ stage/L1.pdf
    ├─ L3  stage/L3.pdf            （41_ 抹掉双份位图 / 42_+43_ 换掉纯位图标题）

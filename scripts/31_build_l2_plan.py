@@ -83,10 +83,20 @@ def main():
     ap.add_argument("--output", default="output/product.pdf")
     ap.add_argument("--min-h", type=float, default=5.0)
     ap.add_argument("--dup-threshold", type=float, default=0.55)
+    ap.add_argument("--qc-flags", default=None,
+                    help="18_ocr_qc.py 的 flags.json：skip 块不覆盖（与 30 的过滤保持一致）")
     args = ap.parse_args()
 
     units = load_units()
     trans = load_trans()
+
+    # QC skip 集合（与 30 --qc-flags 同一套过滤，缺了会把 skip 块又捞回来）
+    qc_skip = set()
+    if args.qc_flags:
+        for f in json.loads(Path(args.qc_flags).read_text(encoding="utf-8"))["items"]:
+            if f["verdict"] == "skip":
+                qc_skip.add((f["page"], f["text"], tuple(f["bbox"])))
+        print(f"QC skip 块: {len(qc_skip)}")
 
     missing = [g for g in units if g not in trans]
     extra = [g for g in trans if g not in units]
@@ -113,6 +123,8 @@ def main():
     for x in items_in:
         t = x["text"].strip()
         if not t or x["cls"] == "skip_numeric":
+            continue
+        if args.qc_flags and (x["page"], t, tuple(x["bbox"])) in qc_skip:
             continue
         if DECORATION.match(t):
             continue

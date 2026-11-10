@@ -1,12 +1,38 @@
 # fonts-langs.md — 字体清单、多语言配置与下载源
 
-## 一、下载源
+## 一、获取字体（分级降级，断网也能继续）
 
-实测可达（沙箱白名单内）：
+`09_fetch_fonts.py` 负责把字体弄到 `work/fonts/`，按下面顺序逐级尝试，成功即停：
+
+| 级 | 来源 | 说明 |
+|---|---|---|
+| L0 | `work/fonts/` 已有静态字体 | 直接跳过 |
+| L1 | `~/.cache/x-translation/fonts/` | 一次下载，跨项目复用 |
+| L2 | 直连 GitHub → jsDelivr → `$XTRANS_FONT_MIRROR` | 单文件逐个下，连接超时 8s、总超时 600s；失败立刻换下一个源 |
+| L3 | macOS 自带字体（宋体 / Times New Roman） | **按组兜底**：中文组缺就补宋体、拉丁组缺就补 Times，只缺哪组换哪组。宋体从 `Songti.ttc` 提取（Black 改用 Bold，因为 Black 只有 8k 字形、遇到生僻字会缺字）；**字形会变**，写 `FONT_SOURCE.json` 并按组告警 |
+| L4 | 都没有 | 报错并列出需要手动放置的文件名 |
+
+```bash
+python3 scripts/09_fetch_fonts.py             # 自动降级（推荐）
+python3 scripts/09_fetch_fonts.py --offline   # 完全不联网，直接走本地/缓存/系统
+python3 scripts/09_fetch_fonts.py --status    # 只看当前字体来源
+XTRANS_FONT_MIRROR=https://<内网镜像前缀> python3 scripts/09_fetch_fonts.py   # 接内网/自建镜像
+```
+
+**为什么这样设计**：字体是回填的前提，但原先只有「直连 GitHub」一条路。外网抖动、
+沙箱拦截或 24 MB 的思源宋体下载超时，整条管线就卡在那里。现在任何一个源失败都只是
+换下一个，全部失败也会降到系统字体——**流程不中断，但降级一定会在终端和
+`work/fonts/FONT_SOURCE.json` 里留痕**，不会让人误以为用的是原字体。
+
+下载源（L2）实测格式：
 
 ```
 https://raw.githubusercontent.com/google/fonts/main/ofl/<family>/<File>.ttf
+https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/<family>/<File>.ttf   # 镜像
 ```
+
+> 思源宋体来自 `notofonts/noto-cjk` 仓库，24 MB；jsDelivr 对该仓库返回 403，
+> 所以这个文件实际只有直连和内网镜像两条路——**L1 缓存对它尤其重要**。
 
 | 用途 | family 路径 | 文件 |
 |---|---|---|
@@ -18,7 +44,7 @@ https://raw.githubusercontent.com/google/fonts/main/ofl/<family>/<File>.ttf
 | 拉丁无衬线 | `roboto` | `Roboto-Regular.ttf` … |
 | 展示体（标题） | `playfairdisplay` | `PlayfairDisplay-Regular.ttf` / `-Bold` |
 
-字体统一放 `work/fonts/`，由 `11_embed_fonts.py` 落地。
+字体统一放 `work/fonts/`：`09_fetch_fonts.py` 取文件，`11_embed_fonts.py` 把可变字体实例化成静态 TTF。
 
 ## 二、字体选择原则
 
